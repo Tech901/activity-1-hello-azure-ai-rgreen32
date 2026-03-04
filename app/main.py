@@ -92,59 +92,108 @@ def _get_language_client():
 # ---------------------------------------------------------------------------
 # TODO: Step 1 - Classify a 311 request with Azure OpenAI
 # ---------------------------------------------------------------------------
+from openai import AzureOpenAI
+
+
 def classify_311_request(request_text: str) -> dict:
-    """Send a Memphis 311 service request to Azure OpenAI for classification.
+    # Step 1.1 - Create Azure OpenAI client
+    client = AzureOpenAI(
+        api_key=os.environ["AZURE_OPENAI_API_KEY"],
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+            api_version="2024-02-01"  # use latest supported version in your region
+    )
 
-    Args:
-        request_text: The citizen's complaint text.
+    # Step 1.2 - Call chat.completions.create()
+    response = client.chat.completions.create(
+        model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a Memphis 311 service classifier.\n"
+                    "Classify the request into exactly one of the following categories:\n"
+                    "Pothole, Noise Complaint, Trash/Litter, Street Light, Watr/Sewer, Other.\n"
+                    "Respond ONLY in valid JSON with the following keys:"
+                    "category (string), confidence (number 0-1), reasoning (string)."
+                ),
+            },
+            {
+                "role": "user",
+                "content": request_text,
+            },
+        ],
+    )
 
-    Returns:
-        dict with keys: category, confidence, reasoning
-    """
-    # TODO: Step 1.1 - Get the OpenAI client
-    # TODO: Step 1.2 - Call client.chat.completions.create() with:
-    #   model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
-    #   A system message that classifies into: Pothole, Noise Complaint,
-    #   Trash/Litter, Street Light, Water/Sewer, Other
-    #   response_format={"type": "json_object"}, temperature=0
-    # TODO: Step 1.3 - Parse the JSON response with json.loads()
-    raise NotImplementedError("Implement classify_311_request in Step 1")
+    # Step 1.3 - Parse JSON
+    result = json.loads(response.choices[0].message.content)
 
-
+    return result
 # ---------------------------------------------------------------------------
 # TODO: Step 2 - Check content safety
 # ---------------------------------------------------------------------------
+from azure.ai.contentsafety import ContentSafetyClient
+from azure.ai.contentsafety.models import AnalyzeTextOptions
+from azure.core.credentials import AzureKeyCredential
+
+
 def check_content_safety(text: str) -> dict:
-    """Check text for harmful content using Azure Content Safety.
+    # Step 2.1 - Create Content Safety client
+    client = ContentSafetyClient(
+        endpoint=os.environ["AZURE_CONTENT_SAFETY_ENDPOINT"],
+        credential=AzureKeyCredential(os.environ["AZURE_CONTENT_SAFETY_KEY"]),
+    )
 
-    Args:
-        text: Text to analyze.
+    # Step 2.2 - Call analyze_text
+    response = client.analyze_text(
+        AnalyzeTextOptions(text=text)
+    )
 
-    Returns:
-        dict with keys: safe (bool), categories (dict of category: severity)
-    """
-    # TODO: Step 2.1 - Get the Content Safety client
-    # TODO: Step 2.2 - Call client.analyze_text() with AnalyzeTextOptions
-    # TODO: Step 2.3 - Return safety results
-    raise NotImplementedError("Implement check_content_safety in Step 2")
+    # Step 2.3 - Extract category severities
+    categories = {}
+    max_severity = 0
 
+    for category in response.categories_analysis:
+        categories[category.category] = category.severity
+        max_severity = max(max_severity, category.severity)
 
+    # Define threshold (0–7 scale, 0 is safe)
+    # Typically:
+    # 0–1 = Safe
+    # 2–3 = Low
+    # 4–5 = Medium
+    # 6–7 = High
+    safe = max_severity <= 1
+
+    return {
+        "safe": safe,
+        "categories": categories,
+    }
 # ---------------------------------------------------------------------------
 # TODO: Step 3 - Extract key phrases
 # ---------------------------------------------------------------------------
+from azure.ai.textanalytics import TextAnalyticsClient
+from azure.core.credentials import AzureKeyCredential
+
+
 def extract_key_phrases(text: str) -> list[str]:
-    """Extract key phrases from text using Azure AI Language.
+    # Step 3.1 - Create Language client
+    client = TextAnalyticsClient(
+        endpoint=os.environ["AZURE_AI_LANGUAGE_ENDPOINT"],
+        credential=AzureKeyCredential(os.environ["AZURE_AI_LANGUAGE_KEY"]),
+    )
 
-    Args:
-        text: Text to analyze.
+    # Step 3.2 - Call extract_key_phrases
+    response = client.extract_key_phrases([text])
 
-    Returns:
-        List of key phrase strings.
-    """
-    # TODO: Step 3.1 - Get the Language client
-    # TODO: Step 3.2 - Call client.extract_key_phrases([text])
-    # TODO: Step 3.3 - Return the list of key phrases
-    raise NotImplementedError("Implement extract_key_phrases in Step 3")
+    result = response[0]
+
+    # Step 3.3 - Return key phrases
+    if not result.is_error:
+        return result.key_phrases
+    else:
+        raise Exception(f"Key phrase extraction failed: {result.error}")
 
 
 def main():
